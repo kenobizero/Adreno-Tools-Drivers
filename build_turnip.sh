@@ -12,6 +12,11 @@ NDK="$WORKDIR/$NDKVER/toolchains/llvm/prebuilt/linux-x86_64/bin"
 BUILD_VERSION="${BUILD_VERSION:-1.0}"
 VARIANT="${VARIANT:-a7xx}"
 MESA_COMMIT="${MESA_COMMIT:-}"
+# Performance knobs (all optional):
+#   ENABLE_LTO=1      thin-LTO build (smaller/faster driver, longer build)
+#   CPU_TUNE=...      e.g. "-mcpu=cortex-a76" ; leave empty for max device compatibility
+ENABLE_LTO="${ENABLE_LTO:-0}"
+CPU_TUNE="${CPU_TUNE:-}"
 
 # tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
 REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
@@ -214,6 +219,11 @@ clean_a7xx_driver_names() {
 
 configure_variant() {
     case "$VARIANT" in
+        a6xx)
+            # Adreno 6xx: plain upstream Mesa. Do NOT revert the D32S8
+            # EARLY_Z_LATE_Z workaround (a70d2af5) - it prevents GPU hangs on a6xx.
+            clean_a7xx_driver_names
+            ;;
         a7xx)
             apply_a7xx_base
             clean_a7xx_driver_names
@@ -256,9 +266,9 @@ build_android() {
     export STRIP=llvm-strip
     export OBJDUMP=llvm-objdump
     export OBJCOPY=llvm-objcopy
-    export LDFLAGS="-fuse-ld=lld"
-    export CFLAGS="-D__ANDROID__ -Wno-error -Wno-error=gnu-empty-initializer -Wno-gnu-empty-initializer -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
-    export CXXFLAGS="-D__ANDROID__ -Wno-error -Wno-error=gnu-empty-initializer -Wno-gnu-empty-initializer -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
+    export LDFLAGS="-fuse-ld=lld -Wl,-O2 -Wl,--gc-sections -Wl,--as-needed"
+    export CFLAGS="-O3 -fno-semantic-interposition ${CPU_TUNE} -D__ANDROID__ -Wno-error -Wno-error=gnu-empty-initializer -Wno-gnu-empty-initializer -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
+    export CXXFLAGS="-O3 -fno-semantic-interposition ${CPU_TUNE} -D__ANDROID__ -Wno-error -Wno-error=gnu-empty-initializer -Wno-gnu-empty-initializer -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
 
     cat > android-aarch64.txt <<EOF
 [binaries]
@@ -295,7 +305,12 @@ EOF
     local output_dir="/tmp/turnip-$VARIANT"
     rm -rf "$build_dir" "$output_dir"
 
-    meson setup "$build_dir"         --cross-file android-aarch64.txt         --native-file native.txt         --prefix "$output_dir"         -Dbuildtype=release         -Dstrip=true         -Dplatforms=android         -Dvideo-codecs=         -Dplatform-sdk-version=36         -Dandroid-stub=true         -Dgallium-drivers=         -Dvulkan-drivers=freedreno         -Dvulkan-beta=true         -Dfreedreno-kmds=kgsl         -Degl=disabled         -Dandroid-libbacktrace=disabled
+    local extra_meson=(-Db_ndebug=true)
+    if [ "$ENABLE_LTO" = "1" ]; then
+        extra_meson+=(-Db_lto=true -Db_lto_mode=thin)
+    fi
+
+    meson setup "$build_dir"         --cross-file android-aarch64.txt         --native-file native.txt         --prefix "$output_dir"         -Dbuildtype=release         -Dstrip=true         -Dplatforms=android         -Dvideo-codecs=         -Dplatform-sdk-version=36         -Dandroid-stub=true         -Dgallium-drivers=         -Dvulkan-drivers=freedreno         -Dvulkan-beta=true         -Dfreedreno-kmds=kgsl         -Degl=disabled         -Dandroid-libbacktrace=disabled "${extra_meson[@]}"
 
     ninja -C "$build_dir" install
 
@@ -308,6 +323,11 @@ package_variant() {
 
     local pretty_name desc suffix
     case "$VARIANT" in
+        a6xx)
+            pretty_name="Turnip A6xx"
+            desc="Adreno 6xx Android/Bionic, upstream Mesa with D32S8 hang workaround kept, -O3"
+            suffix="A6xx"
+            ;;
         a7xx)
             pretty_name="Turnip A7xx"
             desc="StevenMXZ A7xx Android/Bionic — revert D32S8 + has_early_preamble=False"
