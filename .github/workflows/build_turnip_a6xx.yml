@@ -11,6 +11,10 @@ on:
         description: "Enable thin-LTO (slower build, usually faster driver)"
         type: boolean
         default: false
+      cpu_tune:
+        description: "CPU tuning flag. Default targets Snapdragon 865/870 (Cortex-A77/A55). Empty = generic ARMv8"
+        required: false
+        default: "-mcpu=cortex-a77"
 
 permissions:
   contents: write
@@ -45,6 +49,7 @@ jobs:
           BUILD_VERSION: ${{ github.run_number }}
           MESA_COMMIT: ${{ steps.mesa.outputs.commit }}
           ENABLE_LTO: ${{ inputs.enable_lto && '1' || '0' }}
+          CPU_TUNE: ${{ inputs.cpu_tune }}
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh
