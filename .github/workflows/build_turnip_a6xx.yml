@@ -15,6 +15,10 @@ on:
         description: "CPU tuning flag. Default targets Snapdragon 865/870 (Cortex-A77/A55). Empty = generic ARMv8"
         required: false
         default: "-mcpu=cortex-a77"
+      default_tu_debug:
+        description: "TU_DEBUG flags baked into the driver (e.g. nolrz, nolrz,noubwc, sysmem). Empty = none"
+        required: false
+        default: "nolrz"
 
 permissions:
   contents: write
@@ -50,6 +54,7 @@ jobs:
           MESA_COMMIT: ${{ steps.mesa.outputs.commit }}
           ENABLE_LTO: ${{ inputs.enable_lto && '1' || '0' }}
           CPU_TUNE: ${{ inputs.cpu_tune }}
+          DEFAULT_TU_DEBUG: ${{ inputs.default_tu_debug }}
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh

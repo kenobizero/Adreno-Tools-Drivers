@@ -17,6 +17,9 @@ MESA_COMMIT="${MESA_COMMIT:-}"
 #   CPU_TUNE=...      e.g. "-mcpu=cortex-a76" ; leave empty for max device compatibility
 ENABLE_LTO="${ENABLE_LTO:-0}"
 CPU_TUNE="${CPU_TUNE:-}"
+#   DEFAULT_TU_DEBUG  TU_DEBUG flags baked into the driver as default (a6xx).
+#                     A TU_DEBUG set by the app/user at runtime still overrides it.
+DEFAULT_TU_DEBUG="${DEFAULT_TU_DEBUG:-}"
 
 # tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
 REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
@@ -200,6 +203,27 @@ verify_mesa_mr_44838() {
     grep -Fq 'return kgsl_poll_timestamp(device, context_id, timestamp);' "$kgsl" \
         || die "Mesa is missing MR !44838 zero-timeout nonblocking poll fix (e984ef29)"
     log "Mesa MR !44838: both upstream KGSL fixes verified"
+}
+
+# Bake default TU_DEBUG flags into the driver itself, so no emulator/app
+# setting is needed. Implemented as a library constructor (runs at dlopen,
+# before Turnip parses TU_DEBUG) and only applies when TU_DEBUG is unset.
+apply_default_tu_debug() {
+    [ -n "$DEFAULT_TU_DEBUG" ] || return 0
+    log "Baking default TU_DEBUG=$DEFAULT_TU_DEBUG into the driver..."
+    local f="src/freedreno/vulkan/tu_util.cc"
+    [ -f "$f" ] || die "Missing $f"
+    cat >> "$f" <<EOF2
+
+/* Added by build script: default TU_DEBUG, overridable by the environment. */
+#include <stdlib.h>
+__attribute__((constructor(101)))
+static void tu_default_debug_ctor(void)
+{
+   setenv("TU_DEBUG", "$DEFAULT_TU_DEBUG", 0);
+}
+EOF2
+    tail -8 "$f"
 }
 
 apply_android_ndk_fixes() {
@@ -386,6 +410,9 @@ main() {
     if [ "$VARIANT" = "a8xx-gen8" ] || [ "$VARIANT" = "a8xx-patched" ]; then
         apply_Compatibility_a8xx
         apply_a8xx_game_profiles
+    fi
+    if [ "$VARIANT" = "a6xx" ]; then
+        apply_default_tu_debug
     fi
     apply_android_ndk_fixes
     build_android
