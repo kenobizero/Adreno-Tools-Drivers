@@ -23,6 +23,14 @@ on:
         description: "Extra flushes at every flush point: ccu_color,ccu_depth,uche_clean,uche_inval,wmw,wfi,wfm,bindless (empty = none)"
         required: false
         default: ""
+      sync_mode:
+        description: "Selective draw sync: state | program | desc | every:N (empty = off)"
+        required: false
+        default: ""
+      sync_bits:
+        description: "Waits to add on those draws: wfi,wmw,wfm"
+        required: false
+        default: "wfi,wmw,wfm"
 
 permissions:
   contents: write
@@ -60,6 +68,8 @@ jobs:
           CPU_TUNE: ${{ inputs.cpu_tune }}
           DEFAULT_TU_DEBUG: ${{ inputs.default_tu_debug }}
           FLUSH_EXTRA: ${{ inputs.flush_extra }}
+          SYNC_MODE: ${{ inputs.sync_mode }}
+          SYNC_BITS: ${{ inputs.sync_bits }}
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh

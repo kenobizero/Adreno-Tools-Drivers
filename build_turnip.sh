@@ -24,6 +24,11 @@ DEFAULT_TU_DEBUG="${DEFAULT_TU_DEBUG:-}"
 #                     (finer-grained "flushall"): ccu_color,ccu_depth,uche_clean,
 #                     uche_inval,wmw,wfi,wfm,bindless
 FLUSH_EXTRA="${FLUSH_EXTRA:-}"
+#   SYNC_MODE         cheaper "syncdraw": add waits only on some draws.
+#                     state | program | desc | every:N   (empty = off)
+#   SYNC_BITS         which waits to add: wfi,wmw,wfm (default all three = syncdraw)
+SYNC_MODE="${SYNC_MODE:-}"
+SYNC_BITS="${SYNC_BITS:-wfi,wmw,wfm}"
 
 # tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
 REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
@@ -282,6 +287,64 @@ print("patched", p)
 PYEOF
 }
 
+apply_sync_mode() {
+    [ -n "$SYNC_MODE" ] || return 0
+    log "Selective draw sync: mode=$SYNC_MODE bits=$SYNC_BITS"
+    SYNC_MODE="$SYNC_MODE" SYNC_BITS="$SYNC_BITS" python3 - <<'PYEOF'
+import os, sys
+bits = {"wfi": "TU_CMD_FLAG_WAIT_FOR_IDLE", "wmw": "TU_CMD_FLAG_WAIT_MEM_WRITES",
+        "wfm": "TU_CMD_FLAG_WAIT_FOR_ME"}
+names = [n for n in os.environ["SYNC_BITS"].split(",") if n]
+bad = [n for n in names if n not in bits]
+if bad or not names:
+    sys.exit("bad SYNC_BITS %r (valid: wfi,wmw,wfm)" % names)
+flags = " | ".join(bits[n] for n in names)
+
+mode = os.environ["SYNC_MODE"]
+if mode == "state":
+    cond = "(tu_sync_dyn || (tu_sync_dirty & ~TU_CMD_DIRTY_COMPUTE_DESC_SETS))"
+elif mode == "program":
+    cond = ("(tu_sync_dirty & (TU_CMD_DIRTY_PROGRAM | TU_CMD_DIRTY_VS | "
+            "TU_CMD_DIRTY_FS | TU_CMD_DIRTY_TCS | TU_CMD_DIRTY_TES))")
+elif mode == "desc":
+    cond = "(tu_sync_dirty & TU_CMD_DIRTY_DESC_SETS)"
+elif mode.startswith("every:"):
+    n = int(mode.split(":")[1]); assert n > 0
+    cond = "((++tu_sync_ctr %% %d) == 0)" % n
+else:
+    sys.exit("bad SYNC_MODE " + mode)
+
+p = "src/freedreno/vulkan/tu_cmd_buffer.cc"
+s = open(p).read()
+
+a1 = "   uint32_t dynamic_draw_state_dirty = 0;\n"
+assert s.count(a1) == 1, "anchor 1 not unique/found"
+s = s.replace(a1, """   /* build-time selective draw sync (SYNC_MODE) */
+   static thread_local uint32_t tu_sync_ctr;
+   const uint32_t tu_sync_dirty = cmd->state.dirty;
+   const bool tu_sync_dyn = !BITSET_IS_EMPTY(cmd->vk.dynamic_graphics_state.dirty);
+   (void) tu_sync_ctr; (void) tu_sync_dirty; (void) tu_sync_dyn;
+""" + a1)
+
+a2 = """   if (cmd->state.dirty & TU_CMD_DIRTY_FS)
+      tu_flush_dynamic_input_attachments<CHIP>(cmd);
+
+   tu_emit_cache_flush_renderpass<CHIP>(cmd);
+"""
+assert s.count(a2) == 1, "anchor 2 not unique/found"
+s = s.replace(a2, """   if (cmd->state.dirty & TU_CMD_DIRTY_FS)
+      tu_flush_dynamic_input_attachments<CHIP>(cmd);
+
+   if (%s)
+      cmd->state.renderpass_cache.flush_bits |= %s;
+
+   tu_emit_cache_flush_renderpass<CHIP>(cmd);
+""" % (cond, flags))
+open(p, "w").write(s)
+print("patched sync mode", mode, flags)
+PYEOF
+}
+
 apply_android_ndk_fixes() {
     log "Aplicando fixes Android/NDK r29..."
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -465,6 +528,13 @@ EOF
         pretty_name="$pretty_name (fx: $FLUSH_EXTRA)"
         sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
     fi
+    if [ "$VARIANT" = "a6xx" ] && [ -n "$SYNC_MODE" ]; then
+        local sm="${SYNC_MODE//:/}-${SYNC_BITS//,/-}"
+        suffix="${suffix}-sync-${sm}"
+        desc="$desc [selective sync: $SYNC_MODE $SYNC_BITS]"
+        pretty_name="$pretty_name (sync $SYNC_MODE $SYNC_BITS)"
+        sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
+    fi
     local zip_name="Turnip_${suffix}_V${BUILD_VERSION}_${mesa_short}.zip"
     rm -f "$WORKDIR/$zip_name"
     zip -9 -q "$WORKDIR/$zip_name" libvulkan_freedreno.so meta.json
@@ -488,6 +558,7 @@ main() {
     if [ "$VARIANT" = "a6xx" ]; then
         apply_default_tu_debug
         apply_flush_extra
+        apply_sync_mode
     fi
     apply_android_ndk_fixes
     build_android
