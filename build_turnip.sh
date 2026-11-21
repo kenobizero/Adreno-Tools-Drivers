@@ -25,7 +25,7 @@ DEFAULT_TU_DEBUG="${DEFAULT_TU_DEBUG:-}"
 #                     uche_inval,wmw,wfi,wfm,bindless
 FLUSH_EXTRA="${FLUSH_EXTRA:-}"
 #   SYNC_MODE         cheaper "syncdraw": add waits only on some draws.
-#                     state | program | desc | every:N   (empty = off)
+#                     state | program | desc | ps | nops | every:N   (empty = off)
 #   SYNC_BITS         which waits to add: wfi,wmw,wfm (default all three = syncdraw)
 SYNC_MODE="${SYNC_MODE:-}"
 SYNC_BITS="${SYNC_BITS:-wfi,wmw,wfm}"
@@ -311,6 +311,10 @@ elif mode == "program":
             "TU_CMD_DIRTY_FS | TU_CMD_DIRTY_TCS | TU_CMD_DIRTY_TES))")
 elif mode == "desc":
     cond = "(tu_sync_dirty & TU_CMD_DIRTY_DESC_SETS)"
+elif mode == "ps":      # only draws that have a fragment shader
+    cond = "(cmd->state.shaders[MESA_SHADER_FRAGMENT] && !cmd->state.disable_fs)"
+elif mode == "nops":    # only depth-only draws (no fragment shader)
+    cond = "(!cmd->state.shaders[MESA_SHADER_FRAGMENT] || cmd->state.disable_fs)"
 elif mode.startswith("every:"):
     n = int(mode.split(":")[1]); assert n > 0
     cond = "((++tu_sync_ctr %% %d) == 0)" % n

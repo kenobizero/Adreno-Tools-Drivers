@@ -24,7 +24,7 @@ on:
         required: false
         default: ""
       sync_mode:
-        description: "Selective draw sync: state | program | desc | every:N (empty = off)"
+        description: "Selective draw sync: state | program | desc | ps | nops | every:N (empty = off)"
         required: false
         default: ""
       sync_bits:
