@@ -19,6 +19,10 @@ on:
         description: "TU_DEBUG flags baked into the driver (e.g. nolrz, nolrz,noubwc, sysmem). Empty = none"
         required: false
         default: "nolrz"
+      flush_extra:
+        description: "Extra flushes at every flush point: ccu_color,ccu_depth,uche_clean,uche_inval,wmw,wfi,wfm,bindless (empty = none)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -55,6 +59,7 @@ jobs:
           ENABLE_LTO: ${{ inputs.enable_lto && '1' || '0' }}
           CPU_TUNE: ${{ inputs.cpu_tune }}
           DEFAULT_TU_DEBUG: ${{ inputs.default_tu_debug }}
+          FLUSH_EXTRA: ${{ inputs.flush_extra }}
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh

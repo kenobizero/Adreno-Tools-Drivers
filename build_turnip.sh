@@ -20,6 +20,10 @@ CPU_TUNE="${CPU_TUNE:-}"
 #   DEFAULT_TU_DEBUG  TU_DEBUG flags baked into the driver as default (a6xx).
 #                     A TU_DEBUG set by the app/user at runtime still overrides it.
 DEFAULT_TU_DEBUG="${DEFAULT_TU_DEBUG:-}"
+#   FLUSH_EXTRA       comma list of cache flushes/waits added at every flush point
+#                     (finer-grained "flushall"): ccu_color,ccu_depth,uche_clean,
+#                     uche_inval,wmw,wfi,wfm,bindless
+FLUSH_EXTRA="${FLUSH_EXTRA:-}"
 
 # tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
 REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
@@ -232,6 +236,52 @@ EOF2
     tail -8 "$f"
 }
 
+apply_flush_extra() {
+    [ -n "$FLUSH_EXTRA" ] || return 0
+    log "Adding extra flushes at every flush point: $FLUSH_EXTRA"
+    FLUSH_EXTRA="$FLUSH_EXTRA" python3 - <<'PYEOF'
+import os, sys
+m = {
+ "ccu_color":  "TU_CMD_FLAG_CCU_CLEAN_COLOR | TU_CMD_FLAG_CCU_INVALIDATE_COLOR",
+ "ccu_depth":  "TU_CMD_FLAG_CCU_CLEAN_DEPTH | TU_CMD_FLAG_CCU_INVALIDATE_DEPTH",
+ "uche_clean": "TU_CMD_FLAG_CACHE_CLEAN",
+ "uche_inval": "TU_CMD_FLAG_CACHE_INVALIDATE",
+ "wmw":        "TU_CMD_FLAG_WAIT_MEM_WRITES",
+ "wfi":        "TU_CMD_FLAG_WAIT_FOR_IDLE",
+ "wfm":        "TU_CMD_FLAG_WAIT_FOR_ME",
+ "bindless":   "TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE",
+}
+names = [n for n in os.environ["FLUSH_EXTRA"].split(",") if n]
+bad = [n for n in names if n not in m]
+if bad:
+    sys.exit("unknown flush_extra item(s): %s (valid: %s)" % (bad, ",".join(m)))
+expr = " |\n                 ".join(m[n] for n in names)
+
+p = "src/freedreno/vulkan/tu_cmd_buffer.cc"
+s = open(p).read()
+
+a1 = """   if (TU_DEBUG(SYNCDRAW))
+      flushes |= TU_CMD_FLAG_WAIT_MEM_WRITES |
+                 TU_CMD_FLAG_WAIT_FOR_IDLE |
+                 TU_CMD_FLAG_WAIT_FOR_ME;
+"""
+assert s.count(a1) == 1, "anchor 1 (SYNCDRAW block) not found exactly once"
+s = s.replace(a1, a1 + "\n   /* build-time extra flushes (FLUSH_EXTRA) */\n   flushes |= " + expr + ";\n")
+
+a2 = """   if (!cmd_buffer->state.renderpass_cache.flush_bits &&
+       likely(!tu_env.debug))
+      return;
+"""
+assert s.count(a2) == 1, "anchor 2 (renderpass early return) not found exactly once"
+s = s.replace(a2, """   if (!cmd_buffer->state.renderpass_cache.flush_bits &&
+       likely(!tu_env.debug) && false)
+      return;
+""")
+open(p, "w").write(s)
+print("patched", p)
+PYEOF
+}
+
 apply_android_ndk_fixes() {
     log "Aplicando fixes Android/NDK r29..."
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -409,6 +459,12 @@ EOF
         pretty_name="$pretty_name ($DEFAULT_TU_DEBUG)"
         sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
     fi
+    if [ "$VARIANT" = "a6xx" ] && [ -n "$FLUSH_EXTRA" ]; then
+        suffix="${suffix}-fx-${FLUSH_EXTRA//,/-}"
+        desc="$desc [extra flushes: $FLUSH_EXTRA]"
+        pretty_name="$pretty_name (fx: $FLUSH_EXTRA)"
+        sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
+    fi
     local zip_name="Turnip_${suffix}_V${BUILD_VERSION}_${mesa_short}.zip"
     rm -f "$WORKDIR/$zip_name"
     zip -9 -q "$WORKDIR/$zip_name" libvulkan_freedreno.so meta.json
@@ -431,6 +487,7 @@ main() {
     fi
     if [ "$VARIANT" = "a6xx" ]; then
         apply_default_tu_debug
+        apply_flush_extra
     fi
     apply_android_ndk_fixes
     build_android
