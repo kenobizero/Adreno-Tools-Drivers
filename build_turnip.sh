@@ -531,7 +531,9 @@ EOF
     [ -f "$output_dir/lib/libvulkan_freedreno.so" ] || die "libvulkan_freedreno.so não foi gerada"
 
     if [ -n "$DEFAULT_TU_DEBUG" ] && [ "$VARIANT" = "a6xx" ]; then
-        "$NDK/llvm-objdump" -T "$output_dir/lib/libvulkan_freedreno.so" | grep -qw setenv \
+        local dynsyms
+        dynsyms="$("$NDK/llvm-objdump" -T "$output_dir/lib/libvulkan_freedreno.so")"
+        grep -qw setenv <<<"$dynsyms" \
             || die "Default TU_DEBUG was NOT baked into the driver (setenv missing)"
         log "Verified: default TU_DEBUG=$DEFAULT_TU_DEBUG is inside the driver"
     fi
