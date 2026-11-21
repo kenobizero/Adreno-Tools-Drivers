@@ -438,6 +438,11 @@ configure_variant() {
             # EARLY_Z_LATE_Z workaround (a70d2af5) - it prevents GPU hangs on a6xx.
             clean_a7xx_driver_names
             ;;
+        vita3k)
+            # Vita3K build: plain upstream Mesa, none of the game-specific
+            # (BO2) sync workarounds. Tuned only via -O3/CPU tune/optional TU_DEBUG.
+            clean_a7xx_driver_names
+            ;;
         a7xx)
             apply_a7xx_base
             clean_a7xx_driver_names
@@ -530,7 +535,7 @@ EOF
 
     [ -f "$output_dir/lib/libvulkan_freedreno.so" ] || die "libvulkan_freedreno.so não foi gerada"
 
-    if [ -n "$DEFAULT_TU_DEBUG" ] && [ "$VARIANT" = "a6xx" ]; then
+    if [ -n "$DEFAULT_TU_DEBUG" ] && { [ "$VARIANT" = "a6xx" ] || [ "$VARIANT" = "vita3k" ]; }; then
         local dynsyms
         dynsyms="$("$NDK/llvm-objdump" -T "$output_dir/lib/libvulkan_freedreno.so")"
         grep -qw setenv <<<"$dynsyms" \
@@ -549,6 +554,11 @@ package_variant() {
             pretty_name="Turnip A6xx"
             desc="Adreno 6xx Android/Bionic, upstream Mesa with D32S8 hang workaround kept, -O3"
             suffix="A6xx"
+            ;;
+        vita3k)
+            pretty_name="Turnip Vita3K"
+            desc="Adreno 6xx Android/Bionic for Vita3K, upstream Mesa, -O3"
+            suffix="Vita3K"
             ;;
         a7xx)
             pretty_name="Turnip A7xx"
@@ -589,7 +599,7 @@ package_variant() {
 }
 EOF
 
-    if [ "$VARIANT" = "a6xx" ] && [ -n "$DEFAULT_TU_DEBUG" ]; then
+    if { [ "$VARIANT" = "a6xx" ] || [ "$VARIANT" = "vita3k" ]; } && [ -n "$DEFAULT_TU_DEBUG" ]; then
         suffix="${suffix}-${DEFAULT_TU_DEBUG//,/-}"
         desc="$desc [TU_DEBUG=$DEFAULT_TU_DEBUG baked in]"
         pretty_name="$pretty_name ($DEFAULT_TU_DEBUG)"
@@ -633,6 +643,9 @@ main() {
     if [ "$VARIANT" = "a8xx-gen8" ] || [ "$VARIANT" = "a8xx-patched" ]; then
         apply_Compatibility_a8xx
         apply_a8xx_game_profiles
+    fi
+    if [ "$VARIANT" = "vita3k" ]; then
+        apply_default_tu_debug
     fi
     if [ "$VARIANT" = "a6xx" ]; then
         apply_default_tu_debug

@@ -1,0 +1,82 @@
+name: Build Turnip Vita3K
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_commit:
+        description: "Mesa commit (empty = latest main)"
+        required: false
+        default: ""
+      enable_lto:
+        description: "Enable thin-LTO (slower build)"
+        type: boolean
+        default: false
+      cpu_tune:
+        description: "CPU tuning. Default targets Snapdragon 865/870 (Cortex-A77). Empty = generic ARMv8"
+        required: false
+        default: "-mcpu=cortex-a77"
+      default_tu_debug:
+        description: "TU_DEBUG flags baked into the driver for A/B tests (e.g. sysmem, gmem). Empty = none"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl \
+            python3-pip glslang-tools curl zip patch clang lld llvm
+          pip3 install --break-system-packages meson mako
+
+      - name: Resolve Mesa commit
+        id: mesa
+        run: |
+          C="${{ inputs.mesa_commit }}"
+          if [ -z "$C" ]; then
+            C=$(git ls-remote https://gitlab.freedesktop.org/mesa/mesa.git refs/heads/main | awk '{print $1}')
+          fi
+          test -n "$C"
+          echo "commit=$C" >> "$GITHUB_OUTPUT"
+
+      - name: Build Vita3K driver
+        env:
+          VARIANT: vita3k
+          BUILD_VERSION: ${{ github.run_number }}
+          MESA_COMMIT: ${{ steps.mesa.outputs.commit }}
+          ENABLE_LTO: ${{ inputs.enable_lto && '1' || '0' }}
+          CPU_TUNE: ${{ inputs.cpu_tune }}
+          DEFAULT_TU_DEBUG: ${{ inputs.default_tu_debug }}
+        run: |
+          chmod +x build_turnip.sh
+          ./build_turnip.sh
+
+      - name: Verify ZIP
+        run: |
+          test "$(find turnip_workdir -maxdepth 1 -name 'Turnip_*.zip' | wc -l)" -eq 1
+          unzip -t turnip_workdir/Turnip_*.zip
+          unzip -p turnip_workdir/Turnip_*.zip meta.json | python3 -m json.tool
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Turnip-Vita3K
+          path: turnip_workdir/Turnip_*.zip
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="vita3k-$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" turnip_workdir/Turnip_*.zip \
+            --title "Turnip Vita3K - $TAG" \
+            --notes "Vita3K build, Mesa ${{ steps.mesa.outputs.commit }}" \
+            --repo "$GITHUB_REPOSITORY"
