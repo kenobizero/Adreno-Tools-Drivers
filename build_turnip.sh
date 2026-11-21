@@ -339,6 +339,12 @@ EOF
     ninja -C "$build_dir" install
 
     [ -f "$output_dir/lib/libvulkan_freedreno.so" ] || die "libvulkan_freedreno.so não foi gerada"
+
+    if [ -n "$DEFAULT_TU_DEBUG" ] && [ "$VARIANT" = "a6xx" ]; then
+        "$NDK/llvm-objdump" -T "$output_dir/lib/libvulkan_freedreno.so" | grep -qw setenv \
+            || die "Default TU_DEBUG was NOT baked into the driver (setenv missing)"
+        log "Verified: default TU_DEBUG=$DEFAULT_TU_DEBUG is inside the driver"
+    fi
 }
 
 package_variant() {
@@ -391,6 +397,12 @@ package_variant() {
 }
 EOF
 
+    if [ "$VARIANT" = "a6xx" ] && [ -n "$DEFAULT_TU_DEBUG" ]; then
+        suffix="${suffix}-${DEFAULT_TU_DEBUG//,/-}"
+        desc="$desc [TU_DEBUG=$DEFAULT_TU_DEBUG baked in]"
+        pretty_name="$pretty_name ($DEFAULT_TU_DEBUG)"
+        sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
+    fi
     local zip_name="Turnip_${suffix}_V${BUILD_VERSION}_${mesa_short}.zip"
     rm -f "$WORKDIR/$zip_name"
     zip -9 -q "$WORKDIR/$zip_name" libvulkan_freedreno.so meta.json
