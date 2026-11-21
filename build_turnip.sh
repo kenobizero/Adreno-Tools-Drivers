@@ -32,6 +32,9 @@ SYNC_BITS="${SYNC_BITS:-wfi,wmw,wfm}"
 #   SYNC_NONDRAW      waits/flushes added ONLY at non-draw flush points (copies, blits,
 #                     clears, dispatch, events, pass boundaries). Items: wfi,wmw,wfm,flushall
 SYNC_NONDRAW="${SYNC_NONDRAW:-}"
+#   SHADER_DISK_CACHE=1  (vita3k) enable Mesa's persistent shader cache inside the app's
+#                        own cache dir. Mesa disables it on Android by default.
+SHADER_DISK_CACHE="${SHADER_DISK_CACHE:-0}"
 
 # tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
 REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
@@ -242,6 +245,63 @@ static void tu_default_debug_ctor(void)
 }
 EOF2
     tail -8 "$f"
+}
+
+apply_shader_disk_cache() {
+    [ "$SHADER_DISK_CACHE" = "1" ] || return 0
+    log "Enabling persistent shader disk cache (app cache dir)..."
+    local f="src/freedreno/vulkan/tu_util.cc"
+    [ -f "$f" ] || die "Missing $f"
+    cat >> "$f" <<'EOF2'
+
+/* Added by build script: persistent shader cache on Android.
+ * Mesa disables its disk cache by default on Android. Enable it and point it at
+ * the host app's own cache dir (/data/data/<package>/cache), found from
+ * /proc/self/cmdline. Anything the user/app already set is left untouched. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+__attribute__((constructor(102)))
+static void tu_shader_cache_ctor(void)
+{
+   if (getenv("MESA_SHADER_CACHE_DIR") || getenv("MESA_SHADER_CACHE_DISABLE"))
+      return;
+
+   char pkg[256] = {0};
+   FILE *f = fopen("/proc/self/cmdline", "r");
+   if (!f)
+      return;
+   size_t n = fread(pkg, 1, sizeof(pkg) - 1, f);
+   fclose(f);
+   if (n == 0)
+      return;
+
+   char *colon = strchr(pkg, ':');
+   if (colon)
+      *colon = 0;
+
+   /* Android package names only: [A-Za-z0-9._], with at least one dot. */
+   bool has_dot = false;
+   for (const char *c = pkg; *c; c++) {
+      if (*c == '.') has_dot = true;
+      else if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                 (*c >= '0' && *c <= '9') || *c == '_'))
+         return;
+   }
+   if (!has_dot)
+      return;
+
+   char dir[512];
+   snprintf(dir, sizeof(dir), "/data/data/%s/cache", pkg);
+   if (access(dir, W_OK) != 0)
+      return;
+
+   setenv("MESA_SHADER_CACHE_DIR", dir, 0);
+   setenv("MESA_SHADER_CACHE_DISABLE", "false", 0);
+   setenv("MESA_SHADER_CACHE_MAX_SIZE", "512M", 0);
+}
+EOF2
 }
 
 apply_flush_extra() {
@@ -542,6 +602,14 @@ EOF
             || die "Default TU_DEBUG was NOT baked into the driver (setenv missing)"
         log "Verified: default TU_DEBUG=$DEFAULT_TU_DEBUG is inside the driver"
     fi
+
+    if [ "$SHADER_DISK_CACHE" = "1" ] && [ "$VARIANT" = "vita3k" ]; then
+        local sdata
+        sdata="$(strings -a "$output_dir/lib/libvulkan_freedreno.so")"
+        grep -qF "/data/data/%s/cache" <<<"$sdata" \
+            || die "Shader disk cache constructor was NOT built into the driver"
+        log "Verified: shader disk cache constructor is inside the driver"
+    fi
 }
 
 package_variant() {
@@ -624,6 +692,12 @@ EOF
         pretty_name="$pretty_name (nondraw $SYNC_NONDRAW)"
         sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
     fi
+    if [ "$VARIANT" = "vita3k" ] && [ "$SHADER_DISK_CACHE" = "1" ]; then
+        suffix="${suffix}-dcache"
+        desc="$desc [persistent shader cache in app cache dir]"
+        pretty_name="$pretty_name (shader cache)"
+        sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
+    fi
     local zip_name="Turnip_${suffix}_V${BUILD_VERSION}_${mesa_short}.zip"
     rm -f "$WORKDIR/$zip_name"
     zip -9 -q "$WORKDIR/$zip_name" libvulkan_freedreno.so meta.json
@@ -646,6 +720,7 @@ main() {
     fi
     if [ "$VARIANT" = "vita3k" ]; then
         apply_default_tu_debug
+        apply_shader_disk_cache
     fi
     if [ "$VARIANT" = "a6xx" ]; then
         apply_default_tu_debug

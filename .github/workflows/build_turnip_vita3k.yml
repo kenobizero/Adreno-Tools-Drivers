@@ -19,6 +19,10 @@ on:
         description: "TU_DEBUG flags baked into the driver for A/B tests (e.g. sysmem, gmem). Empty = none"
         required: false
         default: ""
+      shader_disk_cache:
+        description: "Persistent shader cache in the app's cache dir (Mesa disables it on Android)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -55,6 +59,7 @@ jobs:
           ENABLE_LTO: ${{ inputs.enable_lto && '1' || '0' }}
           CPU_TUNE: ${{ inputs.cpu_tune }}
           DEFAULT_TU_DEBUG: ${{ inputs.default_tu_debug }}
+          SHADER_DISK_CACHE: ${{ inputs.shader_disk_cache && '1' || '0' }}
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh
