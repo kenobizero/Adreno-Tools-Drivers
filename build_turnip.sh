@@ -213,6 +213,12 @@ apply_default_tu_debug() {
     log "Baking default TU_DEBUG=$DEFAULT_TU_DEBUG into the driver..."
     local f="src/freedreno/vulkan/tu_util.cc"
     [ -f "$f" ] || die "Missing $f"
+    # Unknown TU_DEBUG names are silently ignored by Mesa: refuse them here.
+    local flag
+    for flag in ${DEFAULT_TU_DEBUG//,/ }; do
+        grep -rqF "\"$flag\"" src/freedreno/vulkan \
+            || die "TU_DEBUG flag '$flag' not found in this Mesa (tu_util.cc option table)"
+    done
     cat >> "$f" <<EOF2
 
 /* Added by build script: default TU_DEBUG, overridable by the environment. */
