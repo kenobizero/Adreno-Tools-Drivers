@@ -1,0 +1,42 @@
+name: Fetch Mesa Turnip source
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_commit:
+        description: "Mesa commit (must match the build you are debugging)"
+        required: true
+        default: "98fc8b8f62a5"
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Mesa
+        run: |
+          mkdir mesa && cd mesa && git init -q
+          git remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
+          git fetch -q --depth=1 origin "${{ inputs.mesa_commit }}"
+          git checkout -q --detach FETCH_HEAD
+          git rev-parse HEAD > ../MESA_COMMIT
+      - name: Publish source to branch mesa-src
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir out
+          cp MESA_COMMIT out/
+          mkdir -p out/src/freedreno
+          cp -r mesa/src/freedreno/vulkan out/src/freedreno/
+          cp -r mesa/src/freedreno/common out/src/freedreno/
+          cp -r mesa/src/freedreno/fdl out/src/freedreno/ || true
+          cp -r mesa/src/freedreno/ir3 out/src/freedreno/ 2>/dev/null || true
+          rm -rf out/src/freedreno/ir3/tests out/src/freedreno/vulkan/bvh 2>/dev/null || true
+          du -sh out
+          cd out && git init -q -b mesa-src
+          git config user.name "github-actions" && git config user.email "actions@github.com"
+          git add -A && git commit -q -m "Mesa $(cat MESA_COMMIT) turnip source snapshot"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -f origin mesa-src
