@@ -29,6 +29,9 @@ FLUSH_EXTRA="${FLUSH_EXTRA:-}"
 #   SYNC_BITS         which waits to add: wfi,wmw,wfm (default all three = syncdraw)
 SYNC_MODE="${SYNC_MODE:-}"
 SYNC_BITS="${SYNC_BITS:-wfi,wmw,wfm}"
+#   SYNC_NONDRAW      waits/flushes added ONLY at non-draw flush points (copies, blits,
+#                     clears, dispatch, events, pass boundaries). Items: wfi,wmw,wfm,flushall
+SYNC_NONDRAW="${SYNC_NONDRAW:-}"
 
 # tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
 REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
@@ -345,6 +348,60 @@ print("patched sync mode", mode, flags)
 PYEOF
 }
 
+apply_nondraw_sync() {
+    [ -n "$SYNC_NONDRAW" ] || return 0
+    log "Sync only at non-draw flush points: $SYNC_NONDRAW"
+    SYNC_NONDRAW="$SYNC_NONDRAW" python3 - <<'PYEOF'
+import os, sys
+m = {"wfi": "TU_CMD_FLAG_WAIT_FOR_IDLE", "wmw": "TU_CMD_FLAG_WAIT_MEM_WRITES",
+     "wfm": "TU_CMD_FLAG_WAIT_FOR_ME",
+     "flushall": "TU_CMD_FLAG_ALL_CLEAN | TU_CMD_FLAG_ALL_INVALIDATE"}
+names = [n for n in os.environ["SYNC_NONDRAW"].split(",") if n]
+bad = [n for n in names if n not in m]
+if bad or not names:
+    sys.exit("bad SYNC_NONDRAW %r (valid: %s)" % (names, ",".join(m)))
+expr = " |\n                 ".join(m[n] for n in names)
+
+p = "src/freedreno/vulkan/tu_cmd_buffer.cc"
+s = open(p).read()
+
+# 1. flag + extra flushes inside tu6_emit_flushes, skipped for draw-time flushes
+a0 = "template <chip CHIP>\nstatic void\ntu6_emit_flushes("
+assert s.count(a0) == 1, "anchor 0 not found"
+s = s.replace(a0, "static thread_local bool tu_in_draw_flush;\n\n" + a0)
+
+a1 = """   if (TU_DEBUG(SYNCDRAW))
+      flushes |= TU_CMD_FLAG_WAIT_MEM_WRITES |
+                 TU_CMD_FLAG_WAIT_FOR_IDLE |
+                 TU_CMD_FLAG_WAIT_FOR_ME;
+"""
+assert s.count(a1) == 1, "anchor 1 not found"
+s = s.replace(a1, a1 + "\n   /* build-time: sync only at non-draw flush points */\n"
+              "   if (!tu_in_draw_flush)\n      flushes |= " + expr + ";\n")
+
+# 2. mark the draw-time flush in tu6_draw_common
+a2 = "   tu_emit_cache_flush_renderpass<CHIP>(cmd);\n\n  if (BITSET_TEST("
+assert s.count(a2) == 1, "anchor 2 not found"
+s = s.replace(a2, "   tu_in_draw_flush = true;\n   tu_emit_cache_flush_renderpass<CHIP>(cmd);\n"
+              "   tu_in_draw_flush = false;\n\n  if (BITSET_TEST(")
+
+# 3. make sure renderpass flush point is not skipped when nothing is pending
+a3 = """   if (!cmd_buffer->state.renderpass_cache.flush_bits &&
+       likely(!tu_env.debug))
+      return;
+"""
+if s.count(a3) == 1:
+    s = s.replace(a3, """   if (!cmd_buffer->state.renderpass_cache.flush_bits &&
+       likely(!tu_env.debug) && false)
+      return;
+""")
+else:
+    assert "likely(!tu_env.debug) && false" in s, "anchor 3 not found"
+open(p, "w").write(s)
+print("patched nondraw sync:", names)
+PYEOF
+}
+
 apply_android_ndk_fixes() {
     log "Aplicando fixes Android/NDK r29..."
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -535,6 +592,12 @@ EOF
         pretty_name="$pretty_name (sync $SYNC_MODE $SYNC_BITS)"
         sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
     fi
+    if [ "$VARIANT" = "a6xx" ] && [ -n "$SYNC_NONDRAW" ]; then
+        suffix="${suffix}-nondraw-${SYNC_NONDRAW//,/-}"
+        desc="$desc [sync only at non-draw points: $SYNC_NONDRAW]"
+        pretty_name="$pretty_name (nondraw $SYNC_NONDRAW)"
+        sed -i "s|\"name\": \".*\"|\"name\": \"$pretty_name\"|; s|\"description\": \".*\"|\"description\": \"$desc — Mesa $mesa_short\"|" meta.json
+    fi
     local zip_name="Turnip_${suffix}_V${BUILD_VERSION}_${mesa_short}.zip"
     rm -f "$WORKDIR/$zip_name"
     zip -9 -q "$WORKDIR/$zip_name" libvulkan_freedreno.so meta.json
@@ -559,6 +622,7 @@ main() {
         apply_default_tu_debug
         apply_flush_extra
         apply_sync_mode
+        apply_nondraw_sync
     fi
     apply_android_ndk_fixes
     build_android

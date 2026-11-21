@@ -31,6 +31,10 @@ on:
         description: "Waits to add on those draws: wfi,wmw,wfm"
         required: false
         default: "wfi,wmw,wfm"
+      sync_nondraw:
+        description: "Sync only at non-draw flush points: wfi,wmw,wfm,flushall (empty = off)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -70,6 +74,7 @@ jobs:
           FLUSH_EXTRA: ${{ inputs.flush_extra }}
           SYNC_MODE: ${{ inputs.sync_mode }}
           SYNC_BITS: ${{ inputs.sync_bits }}
+          SYNC_NONDRAW: ${{ inputs.sync_nondraw }}
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh
