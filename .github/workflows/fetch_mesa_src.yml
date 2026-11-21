@@ -33,7 +33,7 @@ jobs:
           cp -r mesa/src/freedreno/common out/src/freedreno/
           cp -r mesa/src/freedreno/fdl out/src/freedreno/ || true
           mkdir -p out/src/util out/src/vulkan/runtime
-          cp mesa/src/util/disk_cache*.c mesa/src/util/disk_cache*.h out/src/util/ || true
+          cp mesa/src/util/disk_cache*.c mesa/src/util/disk_cache*.h mesa/src/util/os_misc.c out/src/util/ || true
           cp mesa/src/vulkan/runtime/vk_pipeline_cache.* mesa/src/vulkan/runtime/vk_pipeline.c out/src/vulkan/runtime/ || true
           cp -r mesa/src/freedreno/ir3 out/src/freedreno/ 2>/dev/null || true
           rm -rf out/src/freedreno/ir3/tests out/src/freedreno/vulkan/bvh 2>/dev/null || true
